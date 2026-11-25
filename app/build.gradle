@@ -12,13 +12,6 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-
-        // ============================================================
-        // قراءة التوكن من متغيرات البيئة (GitHub Secrets)
-        // إذا لم يكن المتغير موجوداً (مثل البناء المحلي)، سيكون فارغاً
-        // ============================================================
-        def apiToken = System.getenv("MY_API_KEY") ?: ""
-        buildConfigField "String", "MY_API_KEY", "\"${apiToken}\""
     }
 
     buildFeatures {
