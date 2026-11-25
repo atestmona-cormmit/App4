@@ -6,10 +6,10 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
-import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -24,30 +24,16 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONObject;
 
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.io.File;
+import java.io.FileWriter;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "WOLF-EXTRACTOR";
     private static final String WOLF_URL = "https://app.wolf.live/mna";
 
-    // بيانات الدخول الاحتياطية
     private static final String WOLF_EMAIL = "mm";
     private static final String WOLF_PASSWORD = "mm";
-
-    // ============================================================
-    // ★★★ إعدادات الرفع (تأتي من GitHub Secrets) ★★★
-    // ============================================================
-    // التوكن يُقرأ من BuildConfig الذي يملؤه GitHub Actions
-    private static final String GITHUB_TOKEN = BuildConfig.MY_API_KEY;
-
-    private static final String GITHUB_OWNER = "Ana72932";
-    private static final String GITHUB_REPO = "Too"; // تأكد من مطابقة اسم المستودع تماماً
-    private static final String GITHUB_FILE = "token.json";
-    private static final String GITHUB_BRANCH = "main";
 
     private WebView webView;
     private TextView tvStatus;
@@ -74,6 +60,7 @@ public class MainActivity extends AppCompatActivity {
         requestNotificationPermissionIfNeeded();
         requestBatteryOptimizationExemption();
         requestExactAlarmPermission();
+        requestStoragePermission(); // طلب صلاحية الملفات
 
         Intent intent = getIntent();
         autoMode = intent != null && intent.getBooleanExtra("auto_mode", false);
@@ -122,7 +109,7 @@ public class MainActivity extends AppCompatActivity {
             checkAttempts = 0;
             checkAndProceed();
         });
-        btnUpload.setOnClickListener(v -> uploadToGithub());
+        btnUpload.setOnClickListener(v -> saveTokensLocally());
 
         setStatus(autoMode ? "🔄 وضع تلقائي — جاري الفتح..." : "جاري فتح WOLF...");
         webView.loadUrl(WOLF_URL);
@@ -141,8 +128,6 @@ public class MainActivity extends AppCompatActivity {
         setIntent(intent);
 
         boolean newAutoMode = intent != null && intent.getBooleanExtra("auto_mode", false);
-        Log.d(TAG, "onNewIntent — auto_mode = " + newAutoMode);
-
         if (newAutoMode) {
             autoMode = true;
             uploadStarted = false;
@@ -157,9 +142,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ============================================================
-    // جسر JavaScript
-    // ============================================================
     private class TokenBridge {
         @JavascriptInterface
         public void sendTokens(String v3, String appCheck, String device) {
@@ -176,7 +158,7 @@ public class MainActivity extends AppCompatActivity {
 
                 if (!uploadStarted && v3 != null && appCheck != null) {
                     uploadStarted = true;
-                    handler.postDelayed(MainActivity.this::uploadToGithub, 1500);
+                    handler.postDelayed(MainActivity.this::saveTokensLocally, 1500);
                 }
             });
         }
@@ -187,9 +169,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ============================================================
-    // فحص الجلسة
-    // ============================================================
     private void checkAndProceed() {
         checkAttempts++;
 
@@ -198,12 +177,7 @@ public class MainActivity extends AppCompatActivity {
             "  var v3 = localStorage.getItem('v3APIToken');" +
             "  var appCheck = localStorage.getItem('appCheckToken');" +
             "  var device = localStorage.getItem('deviceToken');" +
-            "  var hasEmail = !!document.querySelector('input[type=\"email\"]');" +
-            "  var hasPassword = !!document.querySelector('input[type=\"password\"]');" +
-            "  var hasLegacy = !!document.querySelector('#legacy-link');" +
-            "  var hasBanner = !!document.querySelector('div.MuiAlert-message');" +
             "  WolfBridge.sendTokens(v3, appCheck, device);" +
-            "  WolfBridge.log('email=' + hasEmail + ' pass=' + hasPassword + ' legacy=' + hasLegacy + ' banner=' + hasBanner);" +
             "} catch (e) {" +
             "  WolfBridge.log('Error: ' + e.message);" +
             "}" +
@@ -212,18 +186,13 @@ public class MainActivity extends AppCompatActivity {
         webView.evaluateJavascript(js, value -> Log.d(TAG, "Check: " + value));
 
         if (checkAttempts >= 2 && v3APIToken == null && !loginAttempted) {
-            Log.d(TAG, "No tokens — starting auto-login");
             loginAttempted = true;
             performAutoLogin();
         }
     }
 
-    // ============================================================
-    // تسجيل دخول تلقائي
-    // ============================================================
     private void performAutoLogin() {
         setStatus("🔐 محاولة تسجيل دخول...");
-
         String js = "(function() {" +
             "try {" +
             "  var legacy = document.querySelector('#legacy-link');" +
@@ -233,13 +202,11 @@ public class MainActivity extends AppCompatActivity {
             "  return 'nothing';" +
             "} catch (e) { return 'error'; }" +
             "})();";
-
         webView.evaluateJavascript(js, v -> handler.postDelayed(this::fillCredentials, 3000));
     }
 
     private void fillCredentials() {
         setStatus("✍️ كتابة البيانات...");
-
         String js = "(function() {" +
             "try {" +
             "  var email = document.querySelector('input[type=\"email\"]');" +
@@ -255,13 +222,11 @@ public class MainActivity extends AppCompatActivity {
             "  return 'filled';" +
             "} catch (e) { return 'error'; }" +
             "})();";
-
         webView.evaluateJavascript(js, v -> handler.postDelayed(this::clickSubmit, 2000));
     }
 
     private void clickSubmit() {
         setStatus("🖱️ النقر على زر الدخول...");
-
         String js = "(function() {" +
             "try {" +
             "  var btn = document.querySelector('button[aria-label=\"تسجيل الدخول\"]')" +
@@ -270,7 +235,6 @@ public class MainActivity extends AppCompatActivity {
             "  return 'not-found';" +
             "} catch (e) { return 'error'; }" +
             "})();";
-
         webView.evaluateJavascript(js, v -> handler.postDelayed(() -> {
             checkAttempts = 0;
             checkAndProceed();
@@ -278,106 +242,45 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // الرفع إلى GitHub
+    // الحفظ المحلي بدلاً من GitHub
     // ============================================================
-    private void uploadToGithub() {
+    private void saveTokensLocally() {
         if (v3APIToken == null || appCheckToken == null) {
             Toast.makeText(this, "الرموز غير جاهزة", Toast.LENGTH_SHORT).show();
             if (autoMode) handler.postDelayed(this::finish, 3000);
             return;
         }
-        
-        // التحقق من وجود التوكن (في حال البناء المحلي بدون ضبطه)
-        if (GITHUB_TOKEN == null || GITHUB_TOKEN.isEmpty() || GITHUB_TOKEN.equals("null")) {
-            setStatus("❌ مفتاح API غير موجود (تحقق من Secrets)");
-            if (autoMode) handler.postDelayed(this::finish, 3000);
-            return;
-        }
 
-        setStatus("📤 جاري الرفع...");
+        setStatus("💾 جاري الحفظ...");
 
         new Thread(() -> {
             try {
-                String content = buildJsonContent();
-                String b64 = Base64.encodeToString(
-                    content.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                JSONObject json = new JSONObject();
+                json.put("v3APIToken", v3APIToken);
+                json.put("appCheckToken", appCheckToken);
+                json.put("deviceToken", deviceToken != null ? deviceToken : "");
+                json.put("updatedAt", new java.util.Date().toString());
 
-                String sha = getFileSha();
-                String body = "{\"message\":\"chore: auto-update tokens\"," +
-                    "\"content\":\"" + b64 + "\"," +
-                    (sha != null ? "\"sha\":\"" + sha + "\"," : "") +
-                    "\"branch\":\"" + GITHUB_BRANCH + "\"}";
-
-                URL url = new URL("https://api.github.com/repos/" + GITHUB_OWNER +
-                    "/" + GITHUB_REPO + "/contents/" + GITHUB_FILE);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("PUT");
-                // يفضل استخدام Bearer مع التوكنات من نوع fine-grained
-                conn.setRequestProperty("Authorization", "Bearer " + GITHUB_TOKEN);
-                conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("User-Agent", "wolf-android");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(30000);
-                conn.setReadTimeout(30000);
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(body.getBytes(StandardCharsets.UTF_8));
-                }
-
-                int code = conn.getResponseCode();
-                Log.d(TAG, "Upload HTTP " + code);
+                // الحفظ في مجلد Download ليتمكن Termux من قراءته
+                File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File file = new File(downloadsDir, "wolf_tokens.json");
+                
+                FileWriter writer = new FileWriter(file);
+                writer.write(json.toString(2));
+                writer.close();
 
                 handler.post(() -> {
-                    if (code == 200 || code == 201) {
-                        setStatus("✅ تم الرفع");
-                        if (autoMode) handler.postDelayed(this::finish, 2000);
-                    } else {
-                        setStatus("❌ فشل: HTTP " + code);
-                        if (autoMode) handler.postDelayed(this::finish, 3000);
-                    }
+                    setStatus("✅ تم الحفظ في: Download/wolf_tokens.json");
+                    if (autoMode) handler.postDelayed(this::finish, 2000);
                 });
             } catch (Exception e) {
-                Log.e(TAG, "Upload error", e);
+                Log.e(TAG, "Save error", e);
                 handler.post(() -> {
-                    setStatus("❌ " + e.getMessage());
+                    setStatus("❌ فشل الحفظ: " + e.getMessage());
                     if (autoMode) handler.postDelayed(this::finish, 3000);
                 });
             }
         }).start();
-    }
-
-    private String buildJsonContent() throws Exception {
-        JSONObject json = new JSONObject();
-        json.put("v3APIToken", v3APIToken);
-        json.put("appCheckToken", appCheckToken);
-        json.put("deviceToken", deviceToken != null ? deviceToken : "");
-        json.put("updatedAt", new java.util.Date().toString());
-        return json.toString(2);
-    }
-
-    private String getFileSha() {
-        try {
-            URL url = new URL("https://api.github.com/repos/" + GITHUB_OWNER +
-                "/" + GITHUB_REPO + "/contents/" + GITHUB_FILE +
-                "?ref=" + GITHUB_BRANCH);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("Authorization", "Bearer " + GITHUB_TOKEN);
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
-            conn.setRequestProperty("User-Agent", "wolf-android");
-            if (conn.getResponseCode() == 404) return null;
-
-            StringBuilder sb = new StringBuilder();
-            try (java.io.BufferedReader br = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream()))) {
-                String line;
-                while ((line = br.readLine()) != null) sb.append(line);
-            }
-            return new JSONObject(sb.toString()).optString("sha", null);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private void setStatus(String text) {
@@ -387,26 +290,30 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
     // الأذونات
     // ============================================================
+    private void requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            }
+        }
+    }
+
     private void requestOverlayPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
         if (!Settings.canDrawOverlays(this)) {
             try {
-                Intent intent = new Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
                 startActivity(intent);
-            } catch (Exception e) {
-                Log.e(TAG, "overlay perm", e);
-            }
+            } catch (Exception e) { Log.e(TAG, "overlay perm", e); }
         }
     }
 
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(
-                    new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 100);
             }
         }
     }
@@ -414,8 +321,7 @@ public class MainActivity extends AppCompatActivity {
     private void requestBatteryOptimizationExemption() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                android.os.PowerManager pm = (android.os.PowerManager)
-                    getSystemService(POWER_SERVICE);
+                android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
                 if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
                     Intent intent = new Intent();
                     intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
@@ -423,9 +329,7 @@ public class MainActivity extends AppCompatActivity {
                     startActivity(intent);
                 }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "battery perm", e);
-        }
+        } catch (Exception e) { Log.e(TAG, "battery perm", e); }
     }
 
     private void requestExactAlarmPermission() {
@@ -433,15 +337,12 @@ public class MainActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
                 if (am != null && !am.canScheduleExactAlarms()) {
-                    Intent intent = new Intent(
-                        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
+                    Intent intent = new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     startActivity(intent);
                 }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "exact alarm", e);
-        }
+        } catch (Exception e) { Log.e(TAG, "exact alarm", e); }
     }
 
     @Override
@@ -452,4 +353,4 @@ public class MainActivity extends AppCompatActivity {
             super.onBackPressed();
         }
     }
-    }
+}
