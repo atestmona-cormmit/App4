@@ -263,7 +263,7 @@ public class MainActivity extends AppCompatActivity {
 
                 // الحفظ في مجلد Download ليتمكن Termux من قراءته
                 File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                File file = new File(downloadsDir, "wolf_tokens.json");
+                File file = new File(downloadsDir, "wolftokens.json");
                 
                 FileWriter writer = new FileWriter(file);
                 writer.write(json.toString(2));
